@@ -3,6 +3,7 @@ using ConnextX.API.Data.Dtos;
 using ConnextX.API.Data.Models;
 using ConnextX.API.Data.Models.DbContext;
 using ConnextX.API.Data.Models.Users;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -62,22 +63,14 @@ namespace ConnextX.API.Controllers
             }
             return Ok(authResponse);
         }
-        private string GetUserIdByUsername(string username)
-        {
-            return _dbContext.Users
-                .Where(u => u.UserName == username)
-                .Select(u => u.Id)
-                .FirstOrDefault();
-        }
 
 
         [HttpPost]
         [Route("subscribe")]
-        public async Task<IActionResult> Subscribe(int userSelectionPlanId, [FromHeader] string Token)
+        public async Task<IActionResult> Subscribe(int userSelectionPlanId)
         {
-            var loggedInUser = _authManager.VerifyJwt(Token);
-            var userId = GetUserIdByUsername(loggedInUser).ToString();
-            if (userId == null)
+            var loggedInUserId = _authManager.VerifyJwt(GetCurrentSignedInUserToken());
+            if (loggedInUserId == null)
             {
                 return Unauthorized();
             }
@@ -95,7 +88,7 @@ namespace ConnextX.API.Controllers
             //{
             //    return BadRequest("Payment failed. Please try again.");
             //}
-            CurrentSubscription subscription = await GetCurrentSubscriptionOnlyWithuserId(userId);
+            CurrentSubscription subscription = await GetCurrentSubscriptionOnlyWithuserId(loggedInUserId);
             if (subscription != null)
             { 
                 ArchivedSubscriptions archivedSubscription = new ArchivedSubscriptions
@@ -120,7 +113,7 @@ namespace ConnextX.API.Controllers
                 .FirstOrDefault()),
                 Quota = _dbContext.Plans
                 .Where(X => X.PlanId == userSelectionPlanId).Select(X => X.Quota).FirstOrDefault(),
-                UserId = userId,
+                UserId = loggedInUserId,
             };
             await _dbContext.CurrentSubscriptions.AddAsync(_subscription);
             await _dbContext.SaveChangesAsync();
@@ -146,17 +139,16 @@ namespace ConnextX.API.Controllers
 
         [HttpGet]
         [Route("subcription")]
-        public async Task<IActionResult> VerifyTokenGetUserReturnSubscriptionAndPlanByToken([FromHeader] string Token)
+        public async Task<IActionResult> VerifyTokenGetUserReturnSubscriptionAndPlanByToken()
         {
             try
             {
-                var loggedInUser = _authManager.VerifyJwt(Token);
-                if (loggedInUser == null)
+                var loggedInUserId = _authManager.VerifyJwt(GetCurrentSignedInUserToken());
+                if (loggedInUserId == null)
                 {
                     return Unauthorized();
                 }
-                var userId = GetUserIdByUsername(loggedInUser).ToString();
-                var subscriptionWithPlan = await GetCurrentSubscriptionWithPlanByUserId(userId);
+                var subscriptionWithPlan =  GetCurrentSubscriptionWithPlanByUserId(loggedInUserId);
 
                 if (subscriptionWithPlan == null)
                 {
@@ -171,27 +163,26 @@ namespace ConnextX.API.Controllers
             }
 
         }
-        private async Task<object> GetCurrentSubscriptionWithPlanByUserId(string userId)
+        private CurrentSubscription GetCurrentSubscriptionWithPlanByUserId(string userId)
         {
             // This will eagerly load the associated plan
-            var subscriptionWithPlan = _dbContext.CurrentSubscriptions.Where(X => X.UserId == userId).Include(s => s.Plan).FirstOrDefaultAsync(); 
+            CurrentSubscription subscriptionWithPlan =   _dbContext.CurrentSubscriptions.Where(X => X.UserId == userId).Include(s => s.Plan).FirstOrDefault(); 
             return subscriptionWithPlan;
         }
 
         [HttpGet]
         [Route("currentandarchivedsubs")]
-        public async Task<IActionResult> GetCurrentAndAcrhivedSubscriptions([FromHeader] string Token)
+        public async Task<IActionResult> GetCurrentAndAcrhivedSubscriptions()
         {
             try
             {
-                var loggedInUser = _authManager.VerifyJwt(Token);
-                if (loggedInUser == null)
+                var loggedInUserId = _authManager.VerifyJwt(GetCurrentSignedInUserToken());
+                if (loggedInUserId == null)
                 {
                     return Unauthorized();
                 }
-                var userId = GetUserIdByUsername(loggedInUser).ToString();
-                var currentsubscriptionWithPlan = await GetCurrentSubscriptionWithPlanByUserId(userId);
-                var archivedsubscriptionWithPlan = await GetArchivedSubscriptionsWithPlanByUserId(userId);
+                var currentsubscriptionWithPlan =  GetCurrentSubscriptionWithPlanByUserId(loggedInUserId);
+                var archivedsubscriptionWithPlan =  GetArchivedSubscriptionsWithPlanByUserId(loggedInUserId);
 
                 if (currentsubscriptionWithPlan == null && archivedsubscriptionWithPlan == null)
                 {
@@ -205,9 +196,9 @@ namespace ConnextX.API.Controllers
                 return BadRequest(ex.Message.ToString());
             }
         }
-        private async Task<object> GetArchivedSubscriptionsWithPlanByUserId(string userId)
+        private List<ArchivedSubscriptions> GetArchivedSubscriptionsWithPlanByUserId(string userId)
         {
-            var subscriptionWithPlan = _dbContext.ArchivedSubscriptions.Where(X => X.UserId == userId).Include(s => s.Plan).ToListAsync();
+            var subscriptionWithPlan = _dbContext.ArchivedSubscriptions.Where(X => X.UserId == userId).Include(s => s.Plan).ToList();
             return subscriptionWithPlan;
         }
 
@@ -216,9 +207,9 @@ namespace ConnextX.API.Controllers
 
         [HttpGet]
         [Route("validatesubscription")]
-        public async Task<IActionResult> ValidateSubscription([FromHeader] string Token)
+        public async Task<IActionResult> ValidateSubscription()
         {
-            var subscription = await GetCurrentSubscriptionOnlyWithuserId(GetUserIdByUsername(_authManager.VerifyJwt(Token)));
+            var subscription = await GetCurrentSubscriptionOnlyWithuserId((_authManager.VerifyJwt(GetCurrentSignedInUserToken())));
 
             //User has never subscribed to any plan
             if (subscription == null)
@@ -242,13 +233,43 @@ namespace ConnextX.API.Controllers
             return Ok(plans);   
         }
 
+
+        private string GetCurrentSignedInUserToken()
+        {
+            var authorizationHeader = HttpContext.Request.Headers["Authorization"];
+            string accessToken = string.Empty;
+            if (authorizationHeader.ToString().StartsWith("Bearer"))
+            {
+                accessToken = authorizationHeader.ToString().Substring("Bearer ".Length).Trim();
+            }
+            return accessToken;
+        }
+        [Authorize]
+        [HttpPost]
+        [Route("user")]
+        public async Task<IActionResult> GetUser()
+        {
+            var accessToken = GetCurrentSignedInUserToken();
+            var userId = _authManager.VerifyJwt(accessToken);
+            var _user = await _dbContext.Users.Where(X => X.Id == userId).FirstOrDefaultAsync();
+            return Ok(new
+            {
+                FirstName = _user.FirstName,
+                LastName = _user.LastName,
+                UserName = _user.UserName,
+                Email = _user.Email,
+            });
+        }
+
         [HttpPost]
         [Route("users")]
-        public async Task<IActionResult> GetAllUsers()
+        public async Task<IActionResult> GetUsers()
         {
             var users = await _dbContext.Users.ToListAsync();
             return Ok(users);
         }
+
+
 
         [HttpPost]
         [Route("activeusers")]

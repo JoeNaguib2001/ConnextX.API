@@ -57,7 +57,10 @@ namespace ConnextX.API.Repositories
             var token = await GenerateToken();
             return new AuthResponseDto
             {
-                UserId = _user.Id,
+                FirstName = _user.FirstName,
+                LastName = _user.LastName,
+                UserName = _user.UserName,
+                Email = _user.Email,
                 Token = token,
             };
         }
@@ -87,45 +90,7 @@ namespace ConnextX.API.Repositories
             return new JwtSecurityTokenHandler().WriteToken(token);
         }
 
-        private string VerifyJwt(string jwtToken)
-        {
-            try
-            {
-                var handler = new JwtSecurityTokenHandler();
-                var tokenValidationParameters = new TokenValidationParameters
-                {
-                    ValidateIssuerSigningKey = true,
-                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.ASCII.GetBytes(_configuration["JwtSettings:DurationInMinutes"].ToString())),
-                    ValidateIssuer = false,
-                    ValidateAudience = false
-                };
 
-                SecurityToken validatedToken;
-                handler.ValidateToken(jwtToken, tokenValidationParameters, out validatedToken);
-
-                // Extract expiration time from the validated token
-                var decodedJwtToken = (JwtSecurityToken)validatedToken;
-                var expirationTime = decodedJwtToken.ValidTo;
-
-                // Compare expiration time with current time
-                if (expirationTime < DateTime.UtcNow)
-                {
-                    return decodedJwtToken.Subject.ToString();
-                }
-                else
-                {
-                    return "Not A Valid Token , Please Re-Login";
-                }
-            }
-            catch (SecurityTokenExpiredException)
-            {
-                return ("Token has expired");
-            }
-            catch (Exception ex)
-            {
-                return ($"Invalid token: {ex.Message}");
-            }
-        }
         string IAuthManager.VerifyJwt(string jwtToken)
         {
             try
@@ -150,7 +115,7 @@ namespace ConnextX.API.Repositories
                 // Compare expiration time with current time
                 if (expirationTime > DateTime.UtcNow)
                 {
-                    return decodedJwtToken.Subject.ToString();
+                    return decodedJwtToken.Claims.Where(X => X.Type == "uid").FirstOrDefault().Value;
                 }
                 else
                 {
